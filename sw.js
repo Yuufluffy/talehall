@@ -1,6 +1,6 @@
 /* AI 文字 RPG · Service Worker
    只缓存同源的 App Shell；跨域的 AI 接口请求（POST）一律直接放行，绝不拦截�?*/
-const CACHE = 'talehall-v5';
+const CACHE = 'talehall-v6';
 const SHELL = [
   './',
   './index.html',
@@ -37,6 +37,18 @@ self.addEventListener('activate', e => {
 /* 页面点「立即刷新」时发过来的：让还在等待的新 SW 立刻接管 */
 self.addEventListener('message', e => {
   if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+/* 点系统通知：把应用窗口调到前台（提醒条还在，用户自己决定何时刷新） */
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const c = list.filter(x => 'focus' in x)[0];
+      if (c) return c.focus();
+      return self.clients.openWindow('./');
+    })
+  );
 });
 
 self.addEventListener('fetch', e => {

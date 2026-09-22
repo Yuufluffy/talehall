@@ -333,6 +333,8 @@ body.directing #actionInput{border-color:var(--accent2);background:var(--panel3)
 #updateBar #updateText{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #updateBar .btn{flex:0 0 auto;padding:5px 10px}
 @media (min-width:900px){#updateBar{bottom:30px}}
+/* 提醒条出现时，toast 让位，别叠在一起 */
+#updateBar:not([hidden]) + #toasts{bottom:100px}
 #toasts{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:99;
   display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{background:var(--panel3);border:1px solid var(--line);padding:9px 18px;border-radius:22px;
@@ -605,6 +607,7 @@ body.sheet-open .backdrop{opacity:1;pointer-events:auto}
 
   /* Toast 抬高，避开键盘与底部安全区 */
   #toasts{bottom:calc(104px + env(safe-area-inset-bottom,0px))}
+  #updateBar:not([hidden]) + #toasts{bottom:calc(216px + env(safe-area-inset-bottom,0px))}
   .toast{font-size:13px;max-width:88vw}
 
   /* 触屏取消 hover 位移 */
@@ -1277,6 +1280,7 @@ body.sheet-open .backdrop{opacity:1;pointer-events:auto}
   <span class="upd-ico">⬆</span><span id="updateText">发现新版本，刷新后生效</span>
   <button class="btn sm" id="btnUpdate" type="button">立即刷新</button>
   <button class="btn sm" id="btnUpdateLater" type="button">稍后</button>
+  <button class="btn sm" id="btnUpdateNotify" type="button" title="以后发现新版本时发系统通知给我" hidden>🔔</button>
 </div>
 <div id="toasts"></div>
 <input type="file" id="filePick" accept=".json" class="hidden">
@@ -5679,6 +5683,7 @@ function showUpdateBar(ver) {
   const t = $('#updateText');
   if (t) t.textContent = ver ? ('发现新版本（' + ver + '），刷新后生效') : '发现新版本，刷新后生效';
   bar.hidden = false;
+  if (typeof refreshUpdateNotifyBtn === 'function') refreshUpdateNotifyBtn();
 }
 function hideUpdateBar() {
   _updOff = true;
@@ -5695,11 +5700,54 @@ function swVersionOnServer() {
     .then(t => { const m = /CACHE\s*=\s*'([^']+)'/.exec(t); return m ? m[1] : ''; })
     .catch(() => '');
 }
+
+/* ----------------------------------------------------------------------------
+   更新通知（可选）
+   订阅后，发现新版本时除了弹提醒条，还会发一条**系统通知**——把 App 切到后台的人也能收到。
+   局限（如实说明）：纯静态站点没有服务端，做不到「App 完全关掉也能收到」的 Web Push；
+   只要页面还活着（哪怕在后台），这条通知就能到达。人正看着屏幕时不发，避免双重打扰。
+   ---------------------------------------------------------------------------- */
+const NOTIFY_KEY = 'airpg.notifyUpdate';
+function notifyWanted() { try { return localStorage.getItem(NOTIFY_KEY) === '1'; } catch (e) { return false; } }
+function notifySupported() { return typeof Notification !== 'undefined'; }
+function updateNotifyOn() { return notifySupported() && notifyWanted() && Notification.permission === 'granted'; }
+function notifyUpdate(ver) {
+  if (!updateNotifyOn()) return false;
+  if (document.visibilityState === 'visible') return false;   /* 人就在看，不必再弹系统通知 */
+  const title = 'Talehall 有新版本';
+  const opts = { body: (ver ? ver + '：' : '') + '回到应用点「立即刷新」即可', tag: 'talehall-update', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png' };
+  try {
+    if (_updReg && _updReg.showNotification) _updReg.showNotification(title, opts);
+    else if (notifySupported()) new Notification(title, opts);
+    return true;
+  } catch (e) { return false; }
+}
+function refreshUpdateNotifyBtn() {
+  const b = $('#btnUpdateNotify');
+  if (!b) return;
+  b.hidden = !(notifySupported() && !notifyWanted() && Notification.permission !== 'denied');
+}
+function enableUpdateNotify() {
+  if (!notifySupported()) { toast('这个浏览器不支持通知'); return; }
+  const done = r => {
+    if (r === 'granted') {
+      try { localStorage.setItem(NOTIFY_KEY, '1'); } catch (e) {}
+      toast('好，以后发现新版本会给你发通知');
+    } else toast('没有授权，那就只在这里提示你');
+    refreshUpdateNotifyBtn();
+  };
+  try {
+    const p = Notification.requestPermission();
+    if (p && p.then) p.then(done); else Notification.requestPermission(done);   /* 老 Safari 是回调式 */
+  } catch (e) { toast('这个浏览器不支持通知'); }
+}
 function initPWA() {
   const bar = $('#updateBar');
   if (bar) {
     if ($('#btnUpdate')) $('#btnUpdate').addEventListener('click', applyUpdate);
     if ($('#btnUpdateLater')) $('#btnUpdateLater').addEventListener('click', hideUpdateBar);
+    if ($('#btnUpdateNotify')) $('#btnUpdateNotify').addEventListener('click', enableUpdateNotify);
+    refreshUpdateNotifyBtn();
   }
   if (!('serviceWorker' in navigator) || location.protocol.indexOf('http') !== 0) return;
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
@@ -5707,7 +5755,7 @@ function initPWA() {
     /* 首次安装时 controller 为空（那是安装，不是更新），不打扰用户 */
     const announce = () => {
       if (!navigator.serviceWorker.controller) return;
-      swVersionOnServer().then(showUpdateBar);
+      swVersionOnServer().then(ver => { showUpdateBar(ver); notifyUpdate(ver); });
     };
     if (reg.waiting) announce();
     reg.addEventListener('updatefound', () => {
