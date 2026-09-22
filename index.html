@@ -869,6 +869,7 @@ body.sheet-open .backdrop{opacity:1;pointer-events:auto}
           </select></label>
         <label class="check"><input type="checkbox" id="stNpcAlive" checked> 允许 AI 让 NPC 主动行动（世界在你不干预时也会运转）</label>
         <label class="check"><input type="checkbox" id="stAutoPace" checked> 允许 AI 在你长时间重复同类行动时主动推进剧情</label>
+        <label class="check"><input type="checkbox" id="stRealism" checked> 真实感拉满（后果不可撤：钱会花完、伤会留疤、失信会被记住）</label>
       </div>
 
       <div class="card">
@@ -3159,6 +3160,7 @@ function collectSetup() {
     atlas: !!($('#stAtlas') && $('#stAtlas').checked),
     struct: val('#stStruct'),
     npcAlive: $('#stNpcAlive').checked, autoPace: $('#stAutoPace').checked,
+    realism: $('#stRealism').checked,
 
     rules: val('#stRules'), bans: val('#stBans'), canon: val('#stCanon')
   };
@@ -3199,6 +3201,8 @@ function applySetup(s) {
   $('#stStruct').value = s.struct || STRUCT_DEFAULT;
   $('#stNpcAlive').checked = s.npcAlive !== false;
   $('#stAutoPace').checked = s.autoPace !== false;
+  /* 老设定没有 realism 字段：默认开启（这个开关是让玩家自己选的，不替他预设立场） */
+  $('#stRealism').checked = s.realism !== false;
 
   ['dynFactions','dynPlaces','dynNpcs'].forEach(id => $('#' + id).innerHTML = '');
   (s.factions || []).forEach(f => addDynRow('dynFactions', SPEC_FACTION, f));
@@ -3297,7 +3301,7 @@ function applyPreset(p) {
   $('#stQuestSrc').value = p.questSrc || '';
   if ($('#stAtlas')) $('#stAtlas').checked = !!p.atlas;
   setSel('#stScale', p.scale); setSel('#stDiff', p.diff); setSel('#stFocus', p.focus);
-  [['#stDice', p.dice], ['#stNpcAlive', p.npcAlive], ['#stAutoPace', p.autoPace]]
+  [['#stDice', p.dice], ['#stNpcAlive', p.npcAlive], ['#stAutoPace', p.autoPace], ['#stRealism', p.realism]]
     .forEach(([id, v]) => { if (v !== undefined && $(id)) $(id).checked = !!v; });
   set('#stRules', p.rules); set('#stBans', p.bans); set('#stCanon', p.canon);
 
@@ -3651,6 +3655,25 @@ function refreshScaleHint() {
    顺便把一件容易搞混的事写死：**只有 0~10 的能力属性参与检定倍率**，
    生命/精神/体力这类资源池与银币/弹药这类计数都不得掺和。
    ---------------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------------
+   真实感与后果（可开关：`#stRealism`）
+   起因：用户希望玩的时候整个世界更「有重量」——不是靠加大尺度，而是靠让行为有代价。
+   八条都是写作工艺，不涉及任何绕过模型限制的东西。
+   位置：固定前缀区（在「游戏规则」之后、「数值标准」之前），与地图/状态块无关。
+   ---------------------------------------------------------------------------- */
+const REALISM_SPEC = `# 真实感与后果（本局已开启，与「游戏规则」同级）
+
+本局追求**可信**而非**顺利**。世界不围着主角转，做了事就有对应的代价。以下八条必须执行：
+
+- **后果不可撤**：伤口会留疤、会残、会感染；断了的骨头不会隔天就好；钱花完就是花完；话说出去收不回来。「睡一觉就没事」一律算跑偏。
+- **代价分配不均**：同一件事，富人、穷人、本地人、外乡人、有靠山的和没靠山的，付的账完全不同。写清楚这一回是谁在付。
+- **NPC 是独立的人**：他们有自己的账单、家人、底线与恐惧。不会因为主角是主角就迁就他——有正当理由就是不帮忙；求人要先拿得出东西。
+- **社会质感**：物价与购买力、天气与季节、气味与声音、街上的闲言与谣言、办事流程的繁琐，都要照实写。世界的重量全在这些地方。
+- **信息永远不完整**：传言有偏差，NPC 会说谎、会记错、会为了面子夸大。主角默认拿不到完整且准确的情报。
+- **暴力的余波**：打斗会累、会失手、会误伤旁人；人死了以后有尸体要处理、有人要追问、有家属会记仇。伤人不是把一个数值扣掉。
+- **时间在流**：主角不在场的时候世界也在动。他离开再回来，局面应该已经变了——事情不会停在原地等他。
+- **道德灰色**：不做道德审判、不给标准答案。对立的双方都要有站得住的道理，选择留给玩家，后果由世界来给。`;
+
 const STAT_STANDARD = `# 数值标准（写属性、算检定、打斗都以此为准）
 **A. 属性**——固定六项（体魄 / 敏捷 / 感知 / 智识 / 意志 / 魅力），**0~99** 的刻度：
 　0＝完全没有｜1~9＝生疏（见过试过，会出错）｜**10~19＝普通人**（一个健康成年人的日常水平；10 是分界线）
@@ -3830,6 +3853,9 @@ ${allowClassic
 - 玩家可能失败。失败也要推动剧情前进，不要卡住、不要重复上一段、不要轻易 game over。
 - 保持设定自洽，已经描写过的细节不要前后矛盾。
 - 数值变化要有依据，不要凭空暴涨暴跌。`);
+
+  /* ---- 真实感与后果（可选开关；固定文案，位置在固定前缀区，不影响缓存命中） ---- */
+  if (s.realism !== false) p.push(REALISM_SPEC);
 
   /* ---- 数值标准（属性与检定的共同标尺，固定文案） ---- */
   const ptsOn = s.attrMode === 'points';

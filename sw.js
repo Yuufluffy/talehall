@@ -1,6 +1,6 @@
 /* AI 文字 RPG · Service Worker
    只缓存同源的 App Shell；跨域的 AI 接口请求（POST）一律直接放行，绝不拦截�?*/
-const CACHE = 'talehall-v3';
+const CACHE = 'talehall-v4';
 const SHELL = [
   './',
   './index.html',
