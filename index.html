@@ -3635,10 +3635,10 @@ function rollCheckD100() {
 }
 
 /* 附着在玩家行动后面的掷骰行（「应用掷骰」档才返回内容） */
-function rollSuffix() {
-  const d100 = rollCheckD100();
-  return d100 ? `\n\n【系统掷骰】d100 = ${d100}（本回合唯一可用的随机数，由系统掷出，不可更改、不可重掷）` : '';
+function rollLine(n) {
+  return n ? `\n\n【系统掷骰】d100 = ${n}（本回合唯一可用的随机数，由系统掷出，不可更改、不可重掷）` : '';
 }
+function rollSuffix() { return rollLine(rollCheckD100()); }
 /* 非古典档位的禁用清单——西幻出戏几乎全出自这里 */
 const STYLE_BAN = '**禁止**：文言虚词（之 / 其 / 乃 / 焉 / 矣 / 乎 / 兮 / 尔 / 汝）、「……者，……也」句式、' +
   '四字成语堆砌与对仗排比、「只见 / 但见 / 话说 / 却说 / 且说」这类说书腔、' +
@@ -3890,6 +3890,7 @@ ${allowClassic
 - 每次回复只推进一小段剧情，然后停下，把行动权交还给玩家。
 - 绝对不要替玩家决定行动、台词或心理活动。
 - 指令有严重歧义时（会导致完全不同的走向），先用一句话问清楚再继续，不要替他选；没有歧义就别问，不要每回合都确认一次。
+- **时间只能前进**：状态块里的 clock / chapter 必须在上一回合的基础上推进，**不许倒退、不许跳回**；若本回合时间没动，照原样写一遍或省略。
 - 玩家可能失败。失败也要推动剧情前进，不要卡住、不要重复上一段、不要轻易 game over。
 - 保持设定自洽，已经描写过的细节不要前后矛盾。
 - 数值变化要有依据，不要凭空暴涨暴跌。`);
@@ -3911,8 +3912,8 @@ ${allowClassic
     p.push(`# 检定与成败（本局核心机制，必须执行）
 本局难度档位「${s.diff}」，**检定基础目标值 = ${base}**。
 
-**什么时候必须检定**：行动的成败**不确定**、且**失败会带来实际代价**时，必须检定。
-不确定就检定——社交、说谎、潜行、辨认、打听、赶路、修东西甚至掏口袋都算，**不只是战斗**。
+**什么时候必须检定**：**三条同时满足**才检定——① 成败真的不确定；② 失败会带来实际代价（掉线索、受伤、得罪人、时间流逝、暴露行踪）；③ 这件事在这一段剧情里有分量。
+**每回合最多检定一次**，挑最要紧的那一件。**不要为日常琐事检定**（走路、推门、点菜、寒暄、扫一眼房间）——那会让检定变得没有意义，也会让玩家感觉不到它。
 反过来：设定上必然成功或必然失败的，直接描写，不要浪费检定。
 
 **绝不允许**：
@@ -4081,9 +4082,11 @@ function reasoningText(o) {
   return String(o.reasoning_content || o.reasoning || '').trim();
 }
 let thinkWarned = false;
+let lastFinish = '';   /* 上一回合的 finish_reason：'length' = 被长度上限截断 */
 async function callLLM(messages, onDelta, opts = {}) {
   if (!CFG.apiUrl) throw new Error('未填写接口地址');
   if (!CFG.model)  throw new Error('未填写模型名');
+  lastFinish = '';
 
   const headers = { 'Content-Type': 'application/json' };
   if (CFG.apiKey) headers['Authorization'] = 'Bearer ' + CFG.apiKey;
@@ -4128,6 +4131,7 @@ async function callLLM(messages, onDelta, opts = {}) {
   if (!res.body || ctype.includes('application/json')) {
     const j = await res.json();
     if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+    lastFinish = (j.choices && j.choices[0] && j.choices[0].finish_reason) || '';
     const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
     const text = typeof msg.content === 'string' ? msg.content : '';
     if (!text) {
@@ -4161,6 +4165,7 @@ async function callLLM(messages, onDelta, opts = {}) {
         if (j.usage) lastUsage = j.usage;
         const ch = j.choices && j.choices[0];
         if (!ch) continue;
+        if (ch.finish_reason) lastFinish = ch.finish_reason;
         const d = (ch.delta && ch.delta.content) || (ch.message && ch.message.content) || '';
         if (d) { full += d; onDelta(d, full); }
         else if (reasoningText(ch.delta) || reasoningText(ch.message)) {
@@ -4532,6 +4537,22 @@ function setMode(m) {
    9. 状态合并 & 游戏循环
    ============================================================================ */
 /* 浅合并：本次输出里存在的键覆盖旧的，缺失的键保留（避免面板突然清空） */
+/* 状态块没拿到时的处置：面板不能静默冻结，选项也不能清空。
+   真实反馈：轮数一多就「状态不更新、选项不给」，就是因为这里把选项清掉了、
+   而只用一句 6 秒的 toast 报错，玩家根本不知道发生了什么。 */
+let stateMissStreak = 0;
+function stateMissNotice(hadTag) {
+  stateMissStreak++;
+  const why = (lastFinish === 'length')
+    ? '输出被长度上限截断了，状态块没写完'
+    : (hadTag ? '状态块不是合法 JSON（通常也是被截断）' : '这一回合模型没输出 <<<STATE>>> 状态块');
+  const fix = stateMissStreak >= 2
+    ? '已经连续 ' + stateMissStreak + ' 回合：把「思考程度」调到「低」或「关闭」（推理模型会把输出额度花在「想」上），或在「AI 接口 → 额外参数」里加 {"max_tokens": 8192} 抬高上限。'
+    : '状态面板与选项保持上一回合不变；想重来就点侧栏的「撤销」。';
+  toast('⚠ ' + why + '——' + fix, 7600);
+  addBubble('sys', '⚠ ' + why + '。' + fix);
+}
+
 function mergeState(prev, next) {
   if (!prev) return next;
   if (!next) return prev;
@@ -4662,9 +4683,13 @@ async function sendAction(text, o = {}) {
 4. 不要提及「导演」「指令」这些词，让世界自己表现出来。
 5. 导演指令管的是世界怎么安排（谁在做什么、什么被揭示、视角切到哪里、什么事件发生）。
    若我**明确指定了成败**（如「一定得手」「必须失手」），就按我说的来，不要再掷检定；
-   若我没指定，就照常检定，不要替主角放水。`;
+   若我没指定，就照常检定，不要替主角放水。
+6. **输出契约不变**：仍然要按「回复格式」给出正文 + <<<STATE>>> 状态块（含 options）——
+   导演指令不改变协议，不要把状态块省掉。`;
   } else {
-    payload = text + rollSuffix();
+    payload = text + rollLine(rollCheckD100());
+    const _dice = (payload.match(/d100 = (\d+)/) || [])[1];
+    if (_dice) addBubble('sys', '🎲 检定骰 d100 = ' + _dice + '（本回合的随机数，下面这一回合会用到）');
   }
   G.history.push({ role: 'user', content: payload });
 
@@ -4691,17 +4716,17 @@ async function sendAction(text, o = {}) {
     }
 
     if (state) {
+      stateMissStreak = 0;
       G.state = mergeState(G.state, state);
       renderPanel();
       renderOptions(state.options || G.state.options || []);
     } else {
       /* 以前只有一句「解析失败」，看不出是哪种坏法。
-         实测最常见的坏法：模型漏写了 <<<END>>>，把后面的 MAP 块吞进了状态块（现已修）。 */
+         实测最常见的坏法：模型漏写了 <<<END>>>，把后面的 MAP 块吞进了状态块（现已修）。
+         另一类：输出被长度上限截断，状态块根本没写完。 */
       try { console.warn('[airpg] 状态块解析失败，原始输出尾部：', String(full || '').slice(-800)); } catch (e) {}
-      toast(parsed.hasStateTag
-        ? '⚠ 状态块不是合法 JSON（多半被截断了）——状态面板保持上一回合'
-        : '⚠ 这一回合模型没输出状态块（<<<STATE>>>）——状态面板保持上一回合', 6400);
-      renderOptions([]);
+      renderOptions((G.state && G.state.options) ? G.state.options : []);   /* 关键：不清空选项 */
+      stateMissNotice(parsed.hasStateTag);
     }
     if (god) { G.god = god; renderGod(); }
     else if (DIRECTOR.reveal) { /* 保留上一次的 God 块 */ }
