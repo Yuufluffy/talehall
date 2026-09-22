@@ -335,6 +335,20 @@ body.directing #actionInput{border-color:var(--accent2);background:var(--panel3)
 @media (min-width:900px){#updateBar{bottom:30px}}
 /* 提醒条出现时，toast 让位，别叠在一起 */
 #updateBar:not([hidden]) + #toasts{bottom:100px}
+/* 本地回合制战斗：弹窗内的血条与战斗日志 */
+.battleWrap .cbt{border:1px solid var(--line);border-radius:10px;padding:7px 9px;margin-bottom:6px;background:var(--panel2)}
+.battleWrap .cbt.dead{opacity:.45}
+.battleWrap .cbt .hd{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-size:12.5px;margin-bottom:4px}
+.battleWrap .cbt .hd .muted{font-size:11px}
+.battleWrap .bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden}
+.battleWrap .bar > i{display:block;height:100%;background:var(--accent);transition:width .25s}
+.battleWrap .bar > i.mid{background:#d8a13a}
+.battleWrap .bar > i.low{background:#c0503f}
+.battleWrap .blog{margin:8px 0;max-height:190px;overflow-y:auto;font-size:12px;line-height:1.6;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px 2px;color:var(--text2)}
+.battleWrap .blog > div{padding:1px 0}
+.battleWrap .btl-acts{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px}
+.battleWrap .btl-acts .btn{flex:1 1 0;min-width:64px;text-align:center}
 #toasts{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:99;
   display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{background:var(--panel3);border:1px solid var(--line);padding:9px 18px;border-radius:22px;
@@ -3730,21 +3744,21 @@ const STAT_STANDARD = `# 数值标准（写属性、算检定、打斗都以此�
 　小成功、例行成功、打赢一只杂兵都不算；点数要让玩家觉得来之不易。
 **D. 计数类**——钱、弹药、口粮（银币 12、子弹 14、净水片 6）。就是个数量，名字写清楚，不参与检定倍率。`;
 
-const COMBAT_SPEC = `# 战斗（真打起来时才用）
+const COMBAT_SPEC = `# 战斗
 开打就在状态块里带上 combat，玩家能看见双方数值；打完了把它设为 null。
 
-口径（与「数值标准」同一套）：
+**逐回合的交手由应用在本地结算**（命中 / 伤害 / 先手 / 生死都在客户端算，不花 token）：
+你只需要做两件事——
+① 开打时给出**初始战斗块**（形状见下，敌人数值一次定好）；
+② 打完后在正文里叙述**结果与后果**。
+**不要自己逐回合描写交手过程，也不要自己改敌人的生命或胜负**——玩家会在弹出的战斗界面里自己出招，
+应用会把最终结果写回状态。你看到 combat 变成 null 且多了 lastBattle 时，就接着往下叙。
+
+口径（与「数值标准」同一套，应用就是按这个算的）：
 · 命中目标值 = 55 ＋ 相关属性×0.4 ＋ 技能加成 − 对方防御×2
 · 防御 = 敏捷÷3（四舍五入）＋ 护具（布衣 0、皮甲 +1、锁甲 +3、板甲 +6；按世界类比，怪物按皮糙肉厚给 0~10）
-· 伤害写在武器上：命中后在区间里取一个整数（如「短剑 5~9」），写进战斗块给玩家看
-· 生命归零按本局难度档处理（轻松＝昏迷；普通＝重伤、可能死；硬核 / 铁人＝可能死亡）
-
-每回合只走一件事，按「先手」高的先动：
-1. 攻方判定：真随机档用应用给的 d100；AI 裁定档由你取一个 1~100 的整数（要真的随机，不要挑）
-2. 命中就取伤害、扣守方生命；没命中就写清楚为什么没打中
-3. 生命掉到一半以下：写明后果（行动受限、检定受罚），不要还像满血一样能打
-4. 玩家说「脱离」：走一次检定（难度按对方威胁），失败白挨一次攻击，成功脱身
-5. 每回合都要更新战斗块里的当前生命
+· 伤害写在武器上：命中后在区间里取一个整数（如「短剑 5~9」）
+· spd（先手）可给可不给，不给时应用按命中值推算
 
 敌人数值按世界与难度给，别随手写（同一世界同类敌人要一致）：
 · 杂兵（地痞、野狼、行尸）：生命 20~35、防御 2~4、命中 30~45、伤害 3~8
@@ -3754,7 +3768,7 @@ const COMBAT_SPEC = `# 战斗（真打起来时才用）
 
 combat 字段形状：
 "combat": {"round": 1, "side": "你先手", "myDef": 4, "myDmg": "5~9", "note": "你握着那把旧短剑",
-           "foe": [{"name": "哥布林", "hp": 26, "hpMax": 30, "def": 3, "hit": 38, "dmg": "4~7", "note": "持短斧"}]}`;
+           "foe": [{"name": "哥布林", "hp": 26, "hpMax": 30, "def": 3, "hit": 38, "dmg": "4~7", "spd": 5, "note": "持短斧"}]}`;
 
 /* 旧版数值口径（属性里直接写资源池的那种存档），保兼容用 */
 const STAT_STANDARD_LEGACY = `# 数值标准（写属性、做检定都以此为准）
@@ -4388,7 +4402,10 @@ function renderPanel() {
       + (cb.side ? ' · ' + esc(cb.side) : '') + '</div>'
       + line({ name: '你', hp: (String((dv.生命 || '0/0')).split('/')[0]), hpMax: (String((dv.生命 || '0/0')).split('/')[1]),
                def: cb.myDef, dmg: cb.myDmg, note: cb.note }, false)
-      + foes.map(f => line(f, true)).join('');
+      + foes.map(f => line(f, true)).join('')
+      + '<button class="btn sm" id="pCombatGo" type="button" style="margin-top:8px">⚔ 进入战斗界面（本地结算）</button>';
+    const gb = $('#pCombatGo');
+    if (gb) gb.onclick = () => openBattle();
   }
 
   $('#wrapEffects').style.display = eff.length ? '' : 'none';
@@ -4488,6 +4505,206 @@ function renderGod() {
     closeSheets();
     setTimeout(() => $('#actionInput').focus(), 80);
   });
+}
+
+const BATTLE = { active: false, over: false, round: 1, guarded: false, log: [], player: null, foes: [], result: '', report: '' };
+
+/* 从自由文本技能表里找一项战斗类技能（「短剑 6」→ 6），返回命中加成 */
+function combatSkillBonus() {
+  const s = String((G.setup && G.setup.skills) || '');
+  const re = /([\u4e00-\u9fa5A-Za-z]{1,8})[^\d]{0,6}(\d{1,3})/g;
+  let best = 0, m;
+  while ((m = re.exec(s))) {
+    if (/剑|刀|枪|弓|弩|斧|锤|拳|掌|棍|杖|矛|鞭|匕|武|战斗|格斗|斗殴|射击|狙击|器械/.test(m[1])) {
+      best = Math.max(best, parseInt(m[2], 10) || 0);
+    }
+  }
+  return Math.min(15, best * 2);
+}
+function battleParseRange(txt, dflt) {
+  const m = String(txt || '').match(/(\d+)\s*[~\-–—]\s*(\d+)/);
+  if (m) return [parseInt(m[1], 10) || dflt, parseInt(m[2], 10) || dflt];
+  const one = String(txt || '').match(/(\d+)/);
+  const v = one ? (parseInt(one[1], 10) || dflt) : dflt;
+  return [v, v];
+}
+function playerBattleSide() {
+  const a = (G.state && G.state.attributes) || {};
+  const pointsMode = !!(G.setup && G.setup.attrMode === 'points');
+  const num = k => parseInt(String(a[k] !== undefined ? a[k] : 0), 10) || 0;
+  const dv = pointsMode ? deriveStats(a) : {};
+  const hpRaw = String(((G.state && G.state.derived) || {}).生命 || dv.生命 || '40/40');
+  const hp = Math.max(0, parseInt(hpRaw.split('/')[0], 10) || 0);
+  const hpMax = parseInt(hpRaw.split('/')[1], 10) || dv.生命 || hp || 40;
+  /* 老口径（属性 0~10）换成等效刻度，保证老存档也能打 */
+  const atkAttr = pointsMode ? Math.max(num('体魄'), num('敏捷')) : Math.max(num('体魄'), num('敏捷')) * 3.5;
+  const base = Math.max(1, Math.round(atkAttr / 4) + 3);
+  return { isPlayer: true, name: (G.setup && G.setup.charName) || '你',
+    hp, hpMax, def: dv.防御 || 0, spd: dv.先手 || 5,
+    hitTarget: 55 + Math.round(atkAttr * 0.4) + combatSkillBonus(),
+    dmgLo: Math.max(1, base - 2), dmgHi: base + 2 };
+}
+function foeBattleSide(f) {
+  const hp = Math.max(0, parseInt(f.hp, 10) || 0);
+  const hpMax = parseInt(f.hpMax, 10) || hp || 1;
+  const [lo, hi] = battleParseRange(f.dmg, 5);
+  const hit = parseInt(f.hit, 10) || 45;
+  return { isPlayer: false, name: String(f.name || '敌人'), hp, hpMax,
+    def: parseInt(f.def, 10) || 0, hit,
+    spd: parseInt(f.spd, 10) || Math.max(2, Math.round(hit / 9)),
+    dmgLo: Math.max(1, lo), dmgHi: Math.max(1, hi), note: String(f.note || '') };
+}
+function battleRoll() { return 1 + Math.floor(Math.random() * 100); }
+function battleDmg(lo, hi) { return lo + Math.floor(Math.random() * Math.max(1, hi - lo + 1)); }
+function battleLog(s) { BATTLE.log.push(s); if (BATTLE.log.length > 100) BATTLE.log = BATTLE.log.slice(-100); }
+function battleAlive() { return BATTLE.foes.filter(f => f.hp > 0); }
+function battleBar(cur, max) {
+  const pct = max ? Math.max(0, Math.min(100, Math.round(cur / max * 100))) : 0;
+  return '<div class="bar"><i class="' + (pct < 34 ? 'low' : pct < 67 ? 'mid' : '') + '" style="width:' + pct + '%"></i></div>';
+}
+function openBattle() {
+  const cb = G.state && G.state.combat;
+  if (!cb) { toast('现在没有进行中的战斗'); return; }
+  if (!BATTLE.active || BATTLE.over || !battleAlive().length) {
+    const foes = (Array.isArray(cb.foe) ? cb.foe : (cb.foes || [])).map(foeBattleSide).filter(f => f.hp > 0);
+    if (!foes.length) { toast('战斗块里没有可打的敌人（等 AI 补上 foe 数值）'); return; }
+    BATTLE.active = true; BATTLE.over = false; BATTLE.guarded = false;
+    BATTLE.round = parseInt(cb.round, 10) || 1;
+    BATTLE.player = playerBattleSide();
+    BATTLE.foes = foes;
+    BATTLE.result = ''; BATTLE.report = '';
+    BATTLE.log = [];
+    battleLog('⚔ 第 ' + BATTLE.round + ' 回合开始' + (cb.note ? '——' + cb.note : ''));
+    battleLog('你：生命 ' + BATTLE.player.hp + '/' + BATTLE.player.hpMax + '，命中目标 ' + BATTLE.player.hitTarget + '，伤害 ' + BATTLE.player.dmgLo + '~' + BATTLE.player.dmgHi);
+    BATTLE.foes.forEach(f => battleLog('对手：' + f.name + '（生命 ' + f.hp + '/' + f.hpMax + '，防御 ' + f.def + '，命中 ' + f.hit + '）'));
+  }
+  showBattle();
+}
+/* 战斗弹窗：复用应用既有的弹窗壳（与「运行与统计」同一套） */
+function battleModal(title, html) {
+  askResolve = null;
+  $('#modalTitle').textContent = title;
+  $('#modalBody').innerHTML = html;
+  $('#modal').classList.remove('hidden');
+}
+function showBattle() {
+  const p = BATTLE.player;
+  const rows = ['<div class="cbt"><div class="hd"><b>' + esc(p.name) + '</b><span class="muted">生命 ' + Math.max(0, p.hp) + '/' + p.hpMax
+    + ' · 防御 ' + p.def + ' · 先手 ' + p.spd + '</span></div>' + battleBar(p.hp, p.hpMax) + '</div>'];
+  BATTLE.foes.forEach(f => rows.push('<div class="cbt' + (f.hp <= 0 ? ' dead' : '') + '"><div class="hd"><b>' + esc(f.name) + '</b><span class="muted">生命 '
+    + Math.max(0, f.hp) + '/' + f.hpMax + ' · 防御 ' + f.def + ' · 命中 ' + f.hit + (f.note ? ' · ' + esc(f.note) : '') + '</span></div>' + battleBar(f.hp, f.hpMax) + '</div>'));
+  const logHtml = BATTLE.log.slice(-16).map(l => '<div>' + esc(l) + '</div>').join('');
+  if (BATTLE.over) {
+    battleModal('⚔ 战斗结束', '<div class="battleWrap">' + rows.join('') + '<div class="blog">' + logHtml + '</div>'
+      + '<p style="margin:10px 0 4px"><b>' + esc(BATTLE.result) + '</b></p>'
+      + '<p class="hint">' + esc(BATTLE.report) + '</p>'
+      + '<button class="btn" id="btlClose" type="button">回到叙事</button></div>');
+    const b = $('#btlClose'); if (b) b.onclick = () => closeModal();
+    return;
+  }
+  battleModal('⚔ 战斗 · 第 ' + BATTLE.round + ' 回合', '<div class="battleWrap">' + rows.join('') + '<div class="blog">' + logHtml + '</div>'
+    + '<div class="btl-acts"><button class="btn sm" data-act="attack" type="button">攻击</button>'
+    + '<button class="btn sm" data-act="skill" type="button">技巧</button>'
+    + '<button class="btn sm" data-act="guard" type="button">防御</button>'
+    + '<button class="btn sm" data-act="flee" type="button">撤离</button></div>'
+    + '<p class="hint">命中目标 ' + p.hitTarget + '（55 ＋ 属性×0.4 ＋ 技能加成 − 敌方防御×2）· 伤害 ' + p.dmgLo + '~' + p.dmgHi
+    + '　战斗在本地结算，不消耗 token。</p></div>');
+  $$('#modalBody [data-act]').forEach(b => { b.onclick = () => battleAct(b.getAttribute('data-act')); });
+}
+function battleAct(kind) {
+  if (!BATTLE.active || BATTLE.over) return;
+  const p = BATTLE.player, alive = battleAlive();
+  if (!alive.length) return battleFinish('victory');
+  const target = alive[0];
+  BATTLE.guarded = false;
+  if (kind === 'guard') {
+    BATTLE.guarded = true;
+    battleLog('🛡 你摆出防御姿态（本回合对方命中 −6、伤害 −2）');
+  } else if (kind === 'flee') {
+    const spd = Math.max.apply(null, alive.map(f => f.spd));
+    const need = Math.max(5, Math.min(95, 45 + Math.round((p.spd - spd) * 4)));
+    const roll = battleRoll();
+    if (roll <= need) { battleLog('🏃 撤离检定：骰 ' + roll + ' ≤ ' + need + ' → 成功摆脱'); return battleFinish('flee'); }
+    battleLog('🏃 撤离检定：骰 ' + roll + ' > ' + need + ' → 没摆脱，白挨一轮');
+  } else {
+    const skill = kind === 'skill';
+    const attr = skill ? Math.max(1, Math.round(p.hitTarget * 0)) : 0;   /* 占位，下面用真实数值 */
+    const base = skill ? (p.hitTarget - 10) : p.hitTarget;
+    const need = Math.max(5, Math.min(95, base));
+    const roll = battleRoll();
+    const crit = roll <= Math.max(0, need - 30), fumble = roll >= Math.min(100, need + 30);
+    if (roll <= need) {
+      let dmg = battleDmg(p.dmgLo, p.dmgHi);
+      if (skill) dmg = Math.round(dmg * 1.5);
+      if (crit) dmg *= 2;
+      target.hp = Math.max(0, target.hp - dmg);
+      battleLog((crit ? '💥 大成功！' : skill ? '✦ 技巧：' : '🗡 攻击：') + '骰 ' + roll + ' ≤ ' + need + ' → 命中 ' + target.name + '，造成 ' + dmg + ' 点伤害'
+        + '（剩 ' + target.hp + '/' + target.hpMax + '）' + (target.hp <= 0 ? '　—— 倒下' : ''));
+    } else {
+      battleLog((fumble ? '💀 惨败！' : '· 失手：') + '骰 ' + roll + ' > ' + need + ' → 攻击落空' + (fumble ? '，露出破绽' : ''));
+    }
+    if (fumble) {
+      const roll2 = battleRoll();
+      if (roll2 <= target.hit) {
+        const d2 = Math.max(1, battleDmg(target.dmgLo, target.dmgHi));
+        p.hp = Math.max(0, p.hp - d2);
+        battleLog('　↳ ' + target.name + ' 抓住破绽：骰 ' + roll2 + ' ≤ ' + target.hit + ' → 你受 ' + d2 + ' 点伤害');
+      } else battleLog('　↳ ' + target.name + ' 没能抓住机会（骰 ' + roll2 + '）');
+    }
+  }
+  if (p.hp <= 0) return battleFinish('down');
+  if (!battleAlive().length) return battleFinish('victory');
+  /* 敌方回合 */
+  battleAlive().forEach(f => {
+    if (p.hp <= 0) return;
+    const need = Math.max(5, Math.min(95, f.hit - (BATTLE.guarded ? 6 : 0)));
+    const roll = battleRoll();
+    if (roll <= need) {
+      const dmg = Math.max(1, battleDmg(f.dmgLo, f.dmgHi) - (BATTLE.guarded ? 2 : 0));
+      p.hp = Math.max(0, p.hp - dmg);
+      battleLog('　↳ ' + f.name + ' 命中（骰 ' + roll + ' ≤ ' + need + '）：你受 ' + dmg + ' 点伤害（剩 ' + p.hp + '/' + p.hpMax + '）');
+    } else battleLog('　↳ ' + f.name + ' 没打中（骰 ' + roll + ' > ' + need + '）');
+  });
+  if (p.hp <= 0) return battleFinish('down');
+  BATTLE.round++;
+  BATTLE.guarded = false;
+  battleLog('—— 第 ' + BATTLE.round + ' 回合 ——');
+  showBattle();
+}
+function battleFinish(kind) {
+  const p = BATTLE.player;
+  const down = BATTLE.foes.filter(f => f.hp <= 0).length;
+  if (kind === 'down') {
+    const diff = String((G.setup && G.setup.diff) || '普通');
+    if (/轻松/.test(diff)) { p.hp = 1; BATTLE.result = '你昏了过去'; BATTLE.report = '按「轻松」难度：你只是昏迷，被对方留下一条命，醒来时局面已经变了。'; }
+    else if (/普通/.test(diff)) { p.hp = 1; BATTLE.result = '你重伤倒地'; BATTLE.report = '按「普通」难度：你重伤倒地、失去意识，生命被压在 1 点，还多了一处伤。'; }
+    else { p.hp = 0; BATTLE.result = '你倒下了'; BATTLE.report = '按「' + diff + '」难度：生命归零即为死亡。这一局到此为止。'; }
+    if (p.hp > 0) {
+      const eff = (G.state.effects || []).slice();
+      eff.push({ name: '重伤', tone: 'bad', desc: '战斗中被击倒后留下的状态，行动与检定应受影响' });
+      G.state.effects = eff.slice(-8);
+    }
+  } else if (kind === 'flee') {
+    BATTLE.result = '你撤出了战斗';
+    BATTLE.report = '你摆脱了交手，但对方还在原地——他们可能会追、会记住你，也可能把这件事传出去。';
+  } else {
+    BATTLE.result = '你赢了';
+    BATTLE.report = '击倒 ' + down + ' 个对手，战斗结束时你还剩 ' + Math.max(0, p.hp) + '/' + p.hpMax + ' 生命。';
+  }
+  /* 写回状态：生命、效果、清空 combat、留一份战斗简报给 AI 接着叙 */
+  const dv = Object.assign({}, G.state.derived || {});
+  dv.生命 = Math.max(0, p.hp) + '/' + p.hpMax;
+  G.state.derived = dv;
+  G.state.combat = null;
+  G.state.lastBattle = { turn: G.turn || 0, result: BATTLE.result, report: BATTLE.report,
+    foes: BATTLE.foes.map(f => f.name + (f.hp <= 0 ? '（已倒下）' : '（逃脱/存活）')).join('、') };
+  BATTLE.over = true;
+  const sum = '⚔ ' + BATTLE.result + '：' + BATTLE.report;
+  addBubble('sys', sum);
+  renderPanel(); autoSave();
+  battleLog('—— ' + BATTLE.result + ' ——');
+  showBattle();
+  toast(sum, 7000);
 }
 
 function renderOptions(opts) {
@@ -4720,6 +4937,8 @@ async function sendAction(text, o = {}) {
       G.state = mergeState(G.state, state);
       renderPanel();
       renderOptions(state.options || G.state.options || []);
+      /* 战斗块出现 → 自动弹出本地战斗界面（本地结算，不调 API） */
+      if (G.state.combat && !BATTLE.active) setTimeout(() => { try { openBattle(); } catch (e) {} }, 450);
     } else {
       /* 以前只有一句「解析失败」，看不出是哪种坏法。
          实测最常见的坏法：模型漏写了 <<<END>>>，把后面的 MAP 块吞进了状态块（现已修）。
