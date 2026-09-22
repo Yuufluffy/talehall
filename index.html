@@ -1542,7 +1542,7 @@ const USAGE_KEY = 'airpg.usage';
 /* undone* 是「被撤销回合」的账：撤销要把数字回滚——否则统计里会留下幽灵消耗
    （真实反馈：只聊了 10 条消息，面板却显示近百万 token，就是撤销过的回合还在计数）。
    但钱在服务商那边是真花了，所以另记一笔，面板里如实显示，不凭空抹掉。 */
-function emptyStats() { return { calls: 0, in: 0, cached: 0, out: 0, reason: 0, ms: 0, noUsage: 0, undoneCalls: 0, undoneIn: 0, undoneOut: 0, log: [] }; }
+function emptyStats() { return { calls: 0, in: 0, cached: 0, out: 0, reason: 0, ms: 0, noUsage: 0, noCache: 0, undoneCalls: 0, undoneIn: 0, undoneOut: 0, log: [] }; }
 function normStats(s) { return Object.assign(emptyStats(), s || {}); }
 /* 接口没返回 usage（部分兼容接口不送）时，把「没算进去」记下来，
    免得用户以为统计偏小是自己看错了。 */
@@ -1565,10 +1565,15 @@ function recordUsage(u, ms) {
   if (!G.stats) G.stats = emptyStats();
   const s = G.stats;
   s.calls++; s.in += rec.in; s.cached += rec.cached; s.out += rec.out; s.reason += rec.reason; s.ms += rec.ms;
+  if (!rec.cached) s.noCache = (s.noCache || 0) + 1;
   s.log.push(rec);
   if (s.log.length > 40) s.log = s.log.slice(-40);
+  /* 连着没命中就提醒一次：多半是这个接口根本不支持提示词缓存，
+     而固定设定每回合全额计费是这类应用最大的一笔开销。 */
+  if (s.noCache === 5) toastOnce('nocache', '这个接口看起来不支持提示词缓存：每回合的固定设定都在全额计费。换支持缓存的接口能省一大截（详见「运行与统计」）。', 7600);
   const d = loadUsage();
   d.calls++; d.in += rec.in; d.cached += rec.cached; d.out += rec.out; d.reason += rec.reason; d.ms += rec.ms;
+  if (!rec.cached) d.noCache = (d.noCache || 0) + 1;
   saveUsage(d);
   updateTurnInfo();
 }
@@ -6981,6 +6986,9 @@ function openLevelPanel() {
 function openRunPanel() {
   const s = G.stats || emptyStats();
   const dev = loadUsage();
+  /* 固定部分的规模：用来解释「缓存到底值多少钱」 */
+  let fixedChars = 0;
+  try { if (G.started) fixedChars = buildSystem().length; } catch (e) {}
   const pct = s.in ? Math.round(s.cached / s.in * 100) : 0;
   const rpct = s.out ? Math.round(s.reason / s.out * 100) : 0;
   const log = (s.log || []).slice(-10).reverse();
@@ -7006,7 +7014,10 @@ function openRunPanel() {
     + (s.undoneCalls ? statLine('已撤销回合', s.undoneCalls + ' 次 · ' + (s.undoneIn + s.undoneOut) + ' token（已从上面的数字里扣掉；但服务商那边是真扣了钱的）') : '')
     + statLine('本机累计', dev.calls + ' 次 · ' + fmtTok(dev.in + dev.out) + ' token（含本局之外的所有局）')
     + '</div>'
-    + '<p class="hint" style="margin:8px 0 0">每回合都会把「世界观 + 规则 + 最近上下文」整套重发一次——这是接口的机制，不是重复计费。固定部分能命中缓存，通常便宜到十分之一；想省就调低「思考程度」和「上下文条数」。</p>'
+    + '<p class="hint" style="margin:8px 0 0">每回合都会把「世界观 + 规则 + 最近上下文」整套重发一次——这是接口的机制（chat 接口是无状态的，服务端不存你的对话），不是重复计费。固定部分能命中缓存，通常便宜到十分之一；想省就调低「思考程度」和「上下文条数」。</p>'
+    + (s.noCache >= 5
+        ? '<p class="hint" style="color:var(--warn);margin:8px 0 0">⚠ 这个接口 ' + s.noCache + ' 次请求都没命中缓存：说明它不支持提示词缓存，那约 ' + fixedChars + ' 字符的固定设定每回合都在按全价计费。换成支持提示词缓存的接口（DeepSeek 系、Anthropic 系）通常能把这部分压到十分之一——这是本应用能省下的最大一笔。</p>'
+        : '')
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
     + '<button class="btn sm" id="runBreakBtn" type="button">📊 提示词构成</button>'
     + '<button class="btn sm" id="runResetBtn" type="button">🧹 清空本局统计</button>'
