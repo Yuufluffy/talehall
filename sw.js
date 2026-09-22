@@ -1,6 +1,6 @@
 /* AI 文字 RPG · Service Worker
    只缓存同源的 App Shell；跨域的 AI 接口请求（POST）一律直接放行，绝不拦截�?*/
-const CACHE = 'talehall-v4';
+const CACHE = 'talehall-v5';
 const SHELL = [
   './',
   './index.html',
@@ -14,7 +14,13 @@ const SHELL = [
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL))
+      /* 逐个用 cache:'reload' 抓：否则这些请求会走【旧】SW 的 fetch 处理器，
+         新缓存里会被塞进旧 index.html（导航走网络所以看不出问题，离线时才坑） */
+      .then(c => Promise.all(SHELL.map(u =>
+        fetch(new Request(u, { cache: 'reload' }))
+          .then(r => (r && r.ok ? c.put(u, r) : null))
+          .catch(() => null)
+      )))
       .catch(() => {})
       .then(() => self.skipWaiting())
   );
@@ -26,6 +32,11 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+/* 页面点「立即刷新」时发过来的：让还在等待的新 SW 立刻接管 */
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', e => {

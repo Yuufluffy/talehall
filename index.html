@@ -324,6 +324,15 @@ body.directing #actionInput{border-color:var(--accent2);background:var(--panel3)
   border:1px solid var(--line);border-radius:calc(var(--radius) * .75);margin-bottom:9px;background:var(--panel2)}
 .save-item .meta{font-size:11.5px;color:var(--muted)}
 .save-item .nm{font-size:13.5px;margin-bottom:3px}
+/* 新版本提醒条：部署后浏览器发现 sw.js 变了就会弹出来，可稍后 */
+#updateBar{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:99;
+  display:flex;align-items:center;gap:8px;max-width:min(92vw,560px);padding:9px 10px 9px 13px;
+  border-radius:12px;background:var(--panel3);border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px}
+#updateBar[hidden]{display:none}
+#updateBar .upd-ico{color:var(--accent);font-weight:700}
+#updateBar #updateText{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#updateBar .btn{flex:0 0 auto;padding:5px 10px}
+@media (min-width:900px){#updateBar{bottom:30px}}
 #toasts{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:99;
   display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{background:var(--panel3);border:1px solid var(--line);padding:9px 18px;border-radius:22px;
@@ -1263,6 +1272,11 @@ body.sheet-open .backdrop{opacity:1;pointer-events:auto}
     <div class="modal-head"><h3 id="modalTitle">存档</h3><button class="btn sm" id="modalClose" type="button">关闭</button></div>
     <div class="modal-body" id="modalBody"></div>
   </div>
+</div>
+<div id="updateBar" hidden>
+  <span class="upd-ico">⬆</span><span id="updateText">发现新版本，刷新后生效</span>
+  <button class="btn sm" id="btnUpdate" type="button">立即刷新</button>
+  <button class="btn sm" id="btnUpdateLater" type="button">稍后</button>
 </div>
 <div id="toasts"></div>
 <input type="file" id="filePick" accept=".json" class="hidden">
@@ -5649,10 +5663,64 @@ function buildMobileMenu() {
   });
 }
 
+/* ----------------------------------------------------------------------------
+   新版本提醒
+   部署后 sw.js 的内容会变（CACHE 版本号），浏览器据此判定有新版本。
+   注意：页面已经加载的 HTML/JS 仍是旧的，**必须重载才生效**，所以这里只提示不强行刷新。
+   file:// 双击打开的场景没有 Service Worker，这段会直接跳过（不报错）。
+   ---------------------------------------------------------------------------- */
+let _updReg = null, _updVer = '', _updOff = false;
+function showUpdateBar(ver) {
+  const bar = $('#updateBar');
+  if (!bar) return;
+  if (ver && ver === _updVer && _updOff) return;   /* 同一版已经提示过、用户选了稍后 */
+  if (ver) _updVer = ver;
+  _updOff = false;
+  const t = $('#updateText');
+  if (t) t.textContent = ver ? ('发现新版本（' + ver + '），刷新后生效') : '发现新版本，刷新后生效';
+  bar.hidden = false;
+}
+function hideUpdateBar() {
+  _updOff = true;
+  const bar = $('#updateBar');
+  if (bar) bar.hidden = true;
+}
+function applyUpdate() {
+  try { if (_updReg && _updReg.waiting) _updReg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+  (window.__updateReload || function () { location.reload(); })();
+}
+function swVersionOnServer() {
+  return fetch('sw.js', { cache: 'no-store' })
+    .then(r => (r.ok ? r.text() : ''))
+    .then(t => { const m = /CACHE\s*=\s*'([^']+)'/.exec(t); return m ? m[1] : ''; })
+    .catch(() => '');
+}
 function initPWA() {
-  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+  const bar = $('#updateBar');
+  if (bar) {
+    if ($('#btnUpdate')) $('#btnUpdate').addEventListener('click', applyUpdate);
+    if ($('#btnUpdateLater')) $('#btnUpdateLater').addEventListener('click', hideUpdateBar);
   }
+  if (!('serviceWorker' in navigator) || location.protocol.indexOf('http') !== 0) return;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    _updReg = reg;
+    /* 首次安装时 controller 为空（那是安装，不是更新），不打扰用户 */
+    const announce = () => {
+      if (!navigator.serviceWorker.controller) return;
+      swVersionOnServer().then(showUpdateBar);
+    };
+    if (reg.waiting) announce();
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => { if (nw.state === 'installed') announce(); });
+    });
+    const poke = () => { try { reg.update().catch(() => {}); } catch (e) {} };
+    setInterval(poke, 15 * 60 * 1000);                        /* 长期开着也能发现新版本 */
+    document.addEventListener('visibilitychange', () => {    /* 回到前台时立刻查一次 */
+      if (document.visibilityState === 'visible') poke();
+    });
+  }).catch(() => {});
 }
 
 /* ============================================================================
