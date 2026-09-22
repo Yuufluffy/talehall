@@ -1539,7 +1539,21 @@ function renderThinkChips() {
      airpg.usage 本机累计（所有局）
    ---------------------------------------------------------------------------- */
 const USAGE_KEY = 'airpg.usage';
-function emptyStats() { return { calls: 0, in: 0, cached: 0, out: 0, reason: 0, ms: 0, log: [] }; }
+/* undone* 是「被撤销回合」的账：撤销要把数字回滚——否则统计里会留下幽灵消耗
+   （真实反馈：只聊了 10 条消息，面板却显示近百万 token，就是撤销过的回合还在计数）。
+   但钱在服务商那边是真花了，所以另记一笔，面板里如实显示，不凭空抹掉。 */
+function emptyStats() { return { calls: 0, in: 0, cached: 0, out: 0, reason: 0, ms: 0, noUsage: 0, undoneCalls: 0, undoneIn: 0, undoneOut: 0, log: [] }; }
+function normStats(s) { return Object.assign(emptyStats(), s || {}); }
+/* 接口没返回 usage（部分兼容接口不送）时，把「没算进去」记下来，
+   免得用户以为统计偏小是自己看错了。 */
+function noteNoUsage() {
+  if (!G.stats) G.stats = emptyStats();
+  G.stats.noUsage = (G.stats.noUsage || 0) + 1;
+  const d = loadUsage();
+  d.noUsage = (d.noUsage || 0) + 1;
+  saveUsage(d);
+  updateTurnInfo();
+}
 function loadUsage() { try { return Object.assign(emptyStats(), JSON.parse(localStorage.getItem(USAGE_KEY) || '{}')); } catch (e) { return emptyStats(); } }
 function saveUsage(u) { try { localStorage.setItem(USAGE_KEY, JSON.stringify(u)); } catch (e) {} }
 function recordUsage(u, ms) {
@@ -4102,7 +4116,7 @@ async function callLLM(messages, onDelta, opts = {}) {
     throw new Error(`HTTP ${res.status} — ${(t || firstErr || res.statusText).slice(0, 400)}`);
   }
   const ms = Date.now() - started;
-  const done = u => { if (u) recordUsage(u, ms); if (u && opts.onUsage) opts.onUsage(u, ms); };
+  const done = u => { if (u) recordUsage(u, ms); else noteNoUsage(); if (u && opts.onUsage) opts.onUsage(u, ms); };
 
   const ctype = res.headers.get('content-type') || '';
 
@@ -4623,9 +4637,8 @@ async function sendAction(text, o = {}) {
   $('#actionInput').value = '';
   autoGrow();
 
-  /* 撤销快照 */
-  G.undo.push({ histLen: G.history.length, state: clone(G.state), god: clone(G.god), turn: G.turn });
-  if (G.undo.length > 40) G.undo.shift();
+  /* 撤销快照（连用量一起存，撤销时好回滚） */
+  pushTurnSnapshot();
 
   if (!o.silent) addBubble(mode === 'director' ? 'director' : 'player', text);
 
@@ -4712,6 +4725,35 @@ async function sendAction(text, o = {}) {
 }
 
 /* ---- 撤销 ---- */
+/* 开新回合前存一份快照：撤销时连用量一起回滚 */
+function pushTurnSnapshot() {
+  G.undo.push({
+    histLen: G.history.length, state: clone(G.state), god: clone(G.god), turn: G.turn,
+    stats: clone(normStats(G.stats)), usage: loadUsage()
+  });
+  if (G.undo.length > 40) G.undo.shift();
+}
+/* 撤销时把用量回滚：数字还原到快照，差额记进「已撤销」那一栏 */
+function rollbackUsage(snap) {
+  if (!snap || !snap.stats) return;
+  const cur = normStats(G.stats), old = normStats(snap.stats);
+  const d = k => Math.max(0, (cur[k] || 0) - (old[k] || 0));
+  const gone = { calls: d('calls'), in: d('in'), cached: d('cached'), out: d('out'), reason: d('reason'), ms: d('ms') };
+  G.stats = Object.assign(old, {
+    undoneCalls: (cur.undoneCalls || 0) + gone.calls,
+    undoneIn: (cur.undoneIn || 0) + gone.in,
+    undoneOut: (cur.undoneOut || 0) + gone.out
+  });
+  if (snap.usage) {
+    const dev = loadUsage();
+    ['calls', 'in', 'cached', 'out', 'reason', 'ms'].forEach(k => { dev[k] = Math.max(0, (dev[k] || 0) - gone[k]); });
+    dev.undoneCalls = (dev.undoneCalls || 0) + gone.calls;
+    dev.undoneIn = (dev.undoneIn || 0) + gone.in;
+    dev.undoneOut = (dev.undoneOut || 0) + gone.out;
+    saveUsage(dev);
+  }
+  updateTurnInfo();
+}
 function undoTurn() {
   if (G.busy) return;
   const snap = G.undo.pop();
@@ -4722,6 +4764,7 @@ function undoTurn() {
   G.state = snap.state;
   G.god = snap.god;
   G.turn = snap.turn;
+  rollbackUsage(snap);
 
   clearNarrative();
   if (G.summary) addBubble('sys', '长期记忆已载入');
@@ -6866,7 +6909,7 @@ function promptBreakdownHtml() {
     + '<div class="muted" style="font-size:12px;margin-bottom:6px">下一次请求会发出去的东西（按大小排序，估算 token ≈ 中文 0.7/字）</div>'
     + secs.map(s => row(s.name, s.chars, ' · ≈' + estTokCjk(s.chars))).join('')
     + '<div style="height:1px;background:var(--line);margin:7px 0"></div>'
-    + row('历史对话（' + CFG.ctxTurns + ' 轮上限）', histChars, ' · ≈' + estTokCjk(histChars))
+    + row('历史对话（最多 ' + CFG.ctxTurns + ' 条 ≈ ' + Math.round(CFG.ctxTurns / 2) + ' 回合）', histChars, ' · ≈' + estTokCjk(histChars))
     + row('合计', allText.length, ' · ≈' + estTokens(allText) + ' token')
     + '<div class="muted" style="font-size:11.5px;margin-top:7px;line-height:1.7">系统提示里【世界设定】是大头，但它每回合都一样 —— 接口的上下文缓存会把它缓存住（实测命中率可达 97%），只按缓存价计。真正每回合新增的是状态块与历史。</div>'
     + '</div>';
@@ -6948,20 +6991,26 @@ function openRunPanel() {
     + '<p class="hint" id="thinkHintRun" style="margin:9px 0 1px"></p>'
     + '<p class="hint" id="runThinkHint" style="margin:0 0 12px"></p>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-    + '<label class="f"><span>上下文轮数 <b id="runCtxVal" style="color:var(--accent)"></b></span><input type="range" id="runCtx" min="8" max="60" step="2"></label>'
+    + '<label class="f"><span>上下文条数 <b id="runCtxVal" style="color:var(--accent)"></b> <span class="muted">（2 条 = 1 回合）</span></span><input type="range" id="runCtx" min="8" max="60" step="2"></label>'
     + '<label class="f"><span>温度 <b id="runTempVal" style="color:var(--accent)"></b></span><input type="range" id="runTemp" min="0" max="1.5" step="0.05"></label>'
     + '</div>'
     + '<div class="panel" style="margin-bottom:12px"><h3>本 局 用 量</h3>'
     + statLine('请求次数', s.calls + ' 次')
-    + statLine('输入', s.in + ' token（缓存命中 ' + s.cached + '，' + pct + '%）')
+    + statLine('输入', s.in + ' token · 平均每次 ' + (s.calls ? Math.round(s.in / s.calls) : 0))
+    + statLine('其中缓存命中', s.cached + '（' + pct + '%）—— 这部分按各家的缓存价计费，通常只要十分之一')
+    + statLine('实际新算的输入', Math.max(0, s.in - s.cached) + ' token')
     + statLine('输出', s.out + ' token' + (s.reason ? '（其中思考 ' + s.reason + '，占 ' + rpct + '%）' : ''))
     + statLine('合计', (s.in + s.out) + ' token ≈ ' + fmtTok(s.in + s.out))
     + statLine('平均每回合', s.calls ? Math.round((s.in + s.out) / s.calls) + ' token' : '—')
-    + statLine('本机累计', dev.calls + ' 次 · ' + fmtTok(dev.in + dev.out) + ' token（本局之外也算）')
+    + (s.noUsage ? statLine('未计入', s.noUsage + ' 次请求接口没返回用量（如该接口不支持 stream_options，统计会偏小）') : '')
+    + (s.undoneCalls ? statLine('已撤销回合', s.undoneCalls + ' 次 · ' + (s.undoneIn + s.undoneOut) + ' token（已从上面的数字里扣掉；但服务商那边是真扣了钱的）') : '')
+    + statLine('本机累计', dev.calls + ' 次 · ' + fmtTok(dev.in + dev.out) + ' token（含本局之外的所有局）')
     + '</div>'
+    + '<p class="hint" style="margin:8px 0 0">每回合都会把「世界观 + 规则 + 最近上下文」整套重发一次——这是接口的机制，不是重复计费。固定部分能命中缓存，通常便宜到十分之一；想省就调低「思考程度」和「上下文条数」。</p>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
     + '<button class="btn sm" id="runBreakBtn" type="button">📊 提示词构成</button>'
     + '<button class="btn sm" id="runResetBtn" type="button">🧹 清空本局统计</button>'
+    + '<button class="btn sm" id="runResetDevBtn" type="button">🧹 清空本机累计</button>'
     + '</div>'
     + '<div id="runBreak" class="hidden" style="margin-bottom:12px"></div>'
     + (log.length
@@ -7004,9 +7053,17 @@ function openRunPanel() {
     if (!box.classList.contains('hidden')) box.innerHTML = promptBreakdownHtml();
   };
   $('#runResetBtn').onclick = () => {
+    const keep = { stats: G.stats };
     G.stats = emptyStats();
     autoSave(); updateTurnInfo();
-    toast('本局统计已清零（本机累计保留）', 3000);
+    toast('本局统计已清零（本机累计保留；已撤销的账一并清掉）', 3000);
+    openRunPanel();
+  };
+  const rd = $('#runResetDevBtn');
+  if (rd) rd.onclick = () => {
+    saveUsage(emptyStats());
+    updateTurnInfo();
+    toast('本机累计已清零（本局统计保留）', 3000);
     openRunPanel();
   };
   const rc = $('#runClose'); if (rc) rc.onclick = closeModal;
